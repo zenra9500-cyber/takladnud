@@ -498,6 +498,200 @@ app.get("/api/v1/categories", async (req, res, next) => {
   }
 });
 
+app.get("/api/v1/shop/dashboard", requireAuth, async (req, res, next) => {
+  try {
+    const [counts] = await pool.execute("SELECT SUM(status='pending') AS pending, SUM(status='confirmed') AS confirmed FROM reservations WHERE shop_id=?", [req.auth.shop_id]);
+    const [recent] = await pool.execute("SELECT r.id,r.status,r.requested_price AS price,r.created_at AS createdAt,st.stall_code AS stallCode,m.name AS marketName,ms.title AS sessionTitle,ms.event_date AS eventDate FROM reservations r JOIN market_sessions ms ON ms.id=r.session_id JOIN markets m ON m.id=ms.market_id JOIN stalls st ON st.id=r.stall_id WHERE r.shop_id=? ORDER BY r.created_at DESC LIMIT 10", [req.auth.shop_id]);
+    return res.json({ data: { counts: counts[0], recent }, meta: {} });
+  } catch (error) { return next(error); }
+});
+
+app.get("/api/v1/markets", async (req, res, next) => {
+  const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0,100) : "";
+  try {
+    const [rows] = await pool.execute("SELECT m.id,m.name,m.description,m.address,COUNT(CASE WHEN ms.status='open' AND ms.event_date>=UTC_DATE() THEN 1 END) AS openSessions,MIN(CASE WHEN ms.status='open' AND ms.event_date>=UTC_DATE() THEN ms.event_date END) AS nextEventDate FROM markets m LEFT JOIN market_sessions ms ON ms.market_id=m.id WHERE m.is_active=1 AND (?='' OR m.name LIKE ? OR m.address LIKE ?) GROUP BY m.id ORDER BY nextEventDate IS NULL,nextEventDate,m.name", [q,`%${q}%`,`%${q}%`]);
+    return res.json({ data: rows, meta: {} });
+  } catch (error) { return next(error); }
+});
+
+app.get("/api/v1/markets/:marketId/sessions", async (req,res,next) => {
+  if (!/^\\d+$/.test(req.params.marketId)) return res.status(400).json({error:{code:"VALIDATION_ERROR",message:"รหัสตลาดไม่ถูกต้อง",details:[]}});
+  try { const [rows]=await pool.execute("SELECT id,market_id AS marketId,title,event_date AS eventDate,start_time AS startTime,end_time AS endTime,status,public_token AS publicToken FROM market_sessions WHERE market_id=? AND status IN ('open','closed') ORDER BY event_date,start_time",[req.params.marketId]); return res.json({data:rows,meta:{}}); } catch(error){return next(error);}
+});
+
+app.get("/api/v1/reservations/:reservationId", requireAuth, async (req,res,next)=>{
+  if(!/^\\d+$/.test(req.params.reservationId))return res.status(400).json({error:{code:"VALIDATION_ERROR",message:"รหัสการจองไม่ถูกต้อง",details:[]}});
+  try{const [rows]=await pool.execute("SELECT r.id,r.status,r.requested_price AS requestedPrice,r.shop_note AS shopNote,r.created_at AS createdAt,r.updated_at AS updatedAt,ms.id AS sessionId,ms.title AS sessionTitle,ms.event_date AS eventDate,m.name AS marketName,st.stall_code AS stallCode FROM reservations r JOIN market_sessions ms ON ms.id=r.session_id JOIN markets m ON m.id=ms.market_id JOIN stalls st ON st.id=r.stall_id WHERE r.id=? AND r.shop_id=? LIMIT 1",[req.params.reservationId,req.auth.shop_id]);if(!rows.length)return res.status(404).json({error:{code:"NOT_FOUND",message:"ไม่พบรายการจอง",details:[]}});return res.json({data:rows[0],meta:{}});}catch(error){return next(error);}
+});
+
+app.get("/api/v1/sessions/:sessionId/stalls", requireAuth, async (req,res,next) => {
+  if (!/^\\d+$/.test(req.params.sessionId)) return res.status(400).json({error:{code:"VALIDATION_ERROR",message:"รหัสรอบไม่ถูกต้อง",details:[]}});
+  try { const [rows]=await pool.execute("SELECT st.id,st.stall_code AS code,st.label,st.map_x AS x,st.map_y AS y,st.map_width AS width,st.map_height AS height,st.base_price AS price,st.status AS stallStatus,CASE WHEN st.status='disabled' THEN 'disabled' WHEN EXISTS(SELECT 1 FROM reservations r WHERE r.session_id=ms.id AND r.stall_id=st.id AND r.status IN ('pending','confirmed')) THEN 'booked' ELSE 'available' END AS availability FROM market_sessions ms JOIN stalls st ON st.market_id=ms.market_id WHERE ms.id=? ORDER BY st.stall_code",[req.params.sessionId]); return res.json({data:rows,meta:{}}); } catch(error){return next(error);}
+});
+
+app.post("/api/v1/reservations", requireAuth, async (req,res,next) => {
+  const sessionId=Number(req.body?.sessionId), stallId=Number(req.body?.stallId), note=req.body?.shopNote;
+  if(!Number.isSafeInteger(sessionId)||sessionId<1||!Number.isSafeInteger(stallId)||stallId<1||(note!=null&&(typeof note!=="string"||note.length>500))) return res.status(400).json({error:{code:"VALIDATION_ERROR",message:"ข้อมูลการจองไม่ถูกต้อง",details:[]}});
+  const connection=await pool.getConnection().catch(next); if(!connection)return;
+  try {
+    await connection.beginTransaction();
+    const [slots]=await connection.execute("SELECT ms.status,ms.booking_opens_at,ms.booking_closes_at,st.base_price,st.status AS stall_status FROM market_sessions ms JOIN stalls st ON st.market_id=ms.market_id WHERE ms.id=? AND st.id=? FOR UPDATE",[sessionId,stallId]);
+    if(!slots.length){await connection.rollback();return res.status(404).json({error:{code:"NOT_FOUND",message:"ไม่พบรอบหรือแผงที่เลือก",details:[]}});}
+    const slot=slots[0];
+    if(slot.status!=="open"||slot.stall_status!=="available"||(slot.booking_opens_at&&new Date(slot.booking_opens_at)>new Date())||(slot.booking_closes_at&&new Date(slot.booking_closes_at)<new Date())){await connection.rollback();return res.status(409).json({error:{code:"BOOKING_CLOSED",message:"รอบนี้ไม่เปิดรับจองหรือแผงปิดใช้งาน",details:[]}});}
+    const [active]=await connection.execute("SELECT id FROM reservations WHERE session_id=? AND stall_id=? AND status IN ('pending','confirmed') LIMIT 1 FOR UPDATE",[sessionId,stallId]);
+    if(active.length){await connection.rollback();return res.status(409).json({error:{code:"SLOT_ALREADY_BOOKED",message:"แผงนี้มีคำขอจองแล้ว",details:[]}});}
+    const [owned]=await connection.execute("SELECT id FROM reservations WHERE shop_id=? AND session_id=? AND status IN ('pending','confirmed') LIMIT 1 FOR UPDATE",[req.auth.shop_id,sessionId]);
+    if(owned.length){await connection.rollback();return res.status(409).json({error:{code:"ACTIVE_RESERVATION_EXISTS",message:"ร้านของคุณมีรายการจองที่ยังดำเนินการในรอบนี้แล้ว",details:[]}});}
+    // Serialize same-shop submissions even when they target different stalls.
+    await connection.execute("SELECT id FROM shops WHERE id=? FOR UPDATE",[req.auth.shop_id]);
+    const [ownedAfterLock] = await connection.execute("SELECT id FROM reservations WHERE shop_id=? AND session_id=? AND status IN ('pending','confirmed') LIMIT 1",[req.auth.shop_id,sessionId]);
+    if(ownedAfterLock.length){await connection.rollback();return res.status(409).json({error:{code:"ACTIVE_RESERVATION_EXISTS",message:"ร้านของคุณมีรายการจองที่ยังดำเนินการในรอบนี้แล้ว",details:[]}});}
+    const [created]=await connection.execute("INSERT INTO reservations (shop_id,session_id,stall_id,requested_price,shop_note) VALUES (?,?,?,?,?)",[req.auth.shop_id,sessionId,stallId,slot.base_price,typeof note==="string"?note.trim()||null:null]);
+    await connection.commit(); return res.status(201).json({data:{id:created.insertId,sessionId,stallId,status:"pending",requestedPrice:slot.base_price},meta:{}});
+  } catch(error){await connection.rollback();if(error.code==="ER_DUP_ENTRY")return res.status(409).json({error:{code:"SLOT_ALREADY_BOOKED",message:"แผงนี้มีคำขอจองแล้ว",details:[]}});return next(error);} finally{connection.release();}
+});
+
+app.get("/api/v1/reservations", requireAuth, async(req,res,next)=>{
+  try{const [rows]=await pool.execute("SELECT r.id,r.status,r.requested_price AS requestedPrice,r.shop_note AS shopNote,r.created_at AS createdAt,ms.id AS sessionId,ms.title AS sessionTitle,ms.event_date AS eventDate,m.name AS marketName,st.stall_code AS stallCode FROM reservations r JOIN market_sessions ms ON ms.id=r.session_id JOIN markets m ON m.id=ms.market_id JOIN stalls st ON st.id=r.stall_id WHERE r.shop_id=? ORDER BY r.created_at DESC LIMIT 100",[req.auth.shop_id]);return res.json({data:rows,meta:{limit:100}});}catch(error){return next(error);}
+});
+app.post("/api/v1/reservations/:reservationId/cancel",requireAuth,async(req,res,next)=>{
+  if(!/^\\d+$/.test(req.params.reservationId))return res.status(400).json({error:{code:"VALIDATION_ERROR",message:"รหัสการจองไม่ถูกต้อง",details:[]}});
+  try{const [result]=await pool.execute("UPDATE reservations SET status='cancelled' WHERE id=? AND shop_id=? AND status='pending'",[req.params.reservationId,req.auth.shop_id]);if(!result.affectedRows)return res.status(409).json({error:{code:"RESERVATION_NOT_CANCELLABLE",message:"ไม่พบคำขอของคุณหรือรายการนี้ไม่สามารถยกเลิกได้",details:[]}});return res.json({data:{id:Number(req.params.reservationId),status:"cancelled"},meta:{}});}catch(error){return next(error);}
+});
+
+function validPublicToken(token){return typeof token==="string"&&/^[a-f0-9]{32}$/i.test(token);}
+app.get("/api/v1/public/sessions/:publicToken/map",async(req,res,next)=>{
+  if(!validPublicToken(req.params.publicToken))return res.status(404).json({error:{code:"PUBLIC_MAP_NOT_FOUND",message:"ไม่พบแผนผังตลาดนี้",details:[]}});
+  try{
+    const [sessions]=await pool.execute("SELECT ms.id,ms.market_id,ms.title,ms.event_date,ms.start_time,ms.end_time,m.name AS market_name,m.address FROM market_sessions ms JOIN markets m ON m.id=ms.market_id WHERE ms.public_token=? AND ms.status IN ('open','closed','completed') AND m.is_active=1 LIMIT 1",[req.params.publicToken]);
+    if(!sessions.length)return res.status(404).json({error:{code:"PUBLIC_MAP_NOT_FOUND",message:"ไม่พบแผนผังตลาดนี้",details:[]}});
+    const s=sessions[0];const [stalls]=await pool.execute("SELECT st.stall_code AS code,st.label,st.map_x AS x,st.map_y AS y,st.map_width AS width,st.map_height AS height,sh.id AS shopId,sh.shop_name AS shopName,sh.description,sh.public_contact AS publicContact,c.name AS category FROM stalls st JOIN reservations r ON r.stall_id=st.id AND r.session_id=? AND r.status='confirmed' JOIN shops sh ON sh.id=r.shop_id AND sh.is_published=1 LEFT JOIN categories c ON c.id=sh.category_id WHERE st.market_id=? AND st.status='available' ORDER BY st.stall_code",[s.id,s.market_id]);
+    return res.json({data:{market:{name:s.market_name,address:s.address},session:{id:s.id,title:s.title,eventDate:s.event_date,startTime:s.start_time,endTime:s.end_time},stalls:stalls.map(st=>({code:st.code,label:st.label,x:st.x,y:st.y,width:st.width,height:st.height,shop:{id:st.shopId,name:st.shopName,category:st.category,description:st.description,publicContact:st.publicContact}}))},meta:{}});
+  }catch(error){return next(error);}
+});
+app.get("/api/v1/public/sessions/:publicToken/shops",async(req,res,next)=>{
+  if(!validPublicToken(req.params.publicToken))return res.status(404).json({error:{code:"PUBLIC_MAP_NOT_FOUND",message:"ไม่พบแผนผังตลาดนี้",details:[]}});
+  const q=typeof req.query.q==="string"?req.query.q.trim().slice(0,100):"";const categoryId=req.query.categoryId&&/^\\d+$/.test(String(req.query.categoryId))?Number(req.query.categoryId):null;
+  try{
+    const [rows]=await pool.execute("SELECT sh.id,sh.shop_name AS shopName,sh.description,sh.public_contact AS publicContact,c.id AS categoryId,c.name AS category,st.stall_code AS stallCode,st.map_x AS x,st.map_y AS y FROM market_sessions ms JOIN markets m ON m.id=ms.market_id AND m.is_active=1 JOIN reservations r ON r.session_id=ms.id AND r.status='confirmed' JOIN shops sh ON sh.id=r.shop_id AND sh.is_published=1 JOIN stalls st ON st.id=r.stall_id AND st.status='available' LEFT JOIN categories c ON c.id=sh.category_id WHERE ms.public_token=? AND ms.status IN ('open','closed','completed') AND (?='' OR sh.shop_name LIKE ? OR sh.description LIKE ?) AND (? IS NULL OR c.id=?) ORDER BY st.stall_code LIMIT 100",[req.params.publicToken,q,`%${q}%`,`%${q}%`,categoryId,categoryId]);
+    const [categories]=await pool.execute("SELECT DISTINCT c.id,c.name FROM market_sessions ms JOIN reservations r ON r.session_id=ms.id AND r.status='confirmed' JOIN shops sh ON sh.id=r.shop_id AND sh.is_published=1 JOIN categories c ON c.id=sh.category_id WHERE ms.public_token=? AND ms.status IN ('open','closed','completed') ORDER BY c.name",[req.params.publicToken]);return res.json({data:{shops:rows,categories},meta:{}});
+  }catch(error){return next(error);}
+});
+app.get("/api/v1/public/sessions/:publicToken/shops/:shopId",async(req,res,next)=>{
+  if(!validPublicToken(req.params.publicToken)||!/^\\d+$/.test(req.params.shopId))return res.status(404).json({error:{code:"NOT_FOUND",message:"ไม่พบข้อมูลร้าน",details:[]}});
+  try{const [rows]=await pool.execute("SELECT sh.id,sh.shop_name AS shopName,sh.description,sh.public_contact AS publicContact,c.name AS category,st.stall_code AS stallCode,st.map_x AS x,st.map_y AS y,ms.title AS sessionTitle,ms.event_date AS eventDate,m.name AS marketName FROM market_sessions ms JOIN markets m ON m.id=ms.market_id AND m.is_active=1 JOIN reservations r ON r.session_id=ms.id AND r.status='confirmed' JOIN shops sh ON sh.id=r.shop_id AND sh.is_published=1 JOIN stalls st ON st.id=r.stall_id LEFT JOIN categories c ON c.id=sh.category_id WHERE ms.public_token=? AND ms.status IN ('open','closed','completed') AND sh.id=? AND r.stall_id=st.id LIMIT 1",[req.params.publicToken,req.params.shopId]);if(!rows.length)return res.status(404).json({error:{code:"NOT_FOUND",message:"ไม่พบข้อมูลร้าน",details:[]}});return res.json({data:rows[0],meta:{}});}catch(error){return next(error);}
+});
+app.get("/api/v1/public/sessions/:publicToken/stalls/:stallCode",async(req,res,next)=>{
+  if(!validPublicToken(req.params.publicToken))return res.status(404).json({error:{code:"PUBLIC_MAP_NOT_FOUND",message:"ไม่พบแผนผังตลาดนี้",details:[]}});
+  try{const [rows]=await pool.execute("SELECT st.stall_code AS code,st.label,st.map_x AS x,st.map_y AS y,sh.id AS shopId,sh.shop_name AS shopName,sh.description,sh.public_contact AS publicContact,c.name AS category FROM market_sessions ms JOIN reservations r ON r.session_id=ms.id AND r.status='confirmed' JOIN stalls st ON st.id=r.stall_id JOIN shops sh ON sh.id=r.shop_id AND sh.is_published=1 LEFT JOIN categories c ON c.id=sh.category_id WHERE ms.public_token=? AND ms.status IN ('open','closed','completed') AND st.stall_code=? AND st.market_id=ms.market_id LIMIT 1",[req.params.publicToken,req.params.stallCode]);if(!rows.length)return res.status(404).json({error:{code:"NOT_FOUND",message:"ไม่พบร้านที่แผงนี้",details:[]}});return res.json({data:rows[0],meta:{}});}catch(error){return next(error);}
+});
+
+app.get("/api/v1/markets", async (req, res, next) => {
+  try {
+    const q = typeof req.query.q === "string" ? `%${req.query.q.trim()}%` : "%";
+    const [rows] = await pool.execute(
+      `SELECT m.id, m.name, m.address, ms.id AS session_id, ms.title, ms.event_date,
+              ms.start_time, ms.end_time, ms.status
+       FROM markets m LEFT JOIN market_sessions ms ON ms.market_id = m.id
+         AND ms.status IN ('open','closed') AND ms.event_date >= UTC_DATE()
+       WHERE m.is_active = 1 AND (m.name LIKE ? OR COALESCE(m.address, '') LIKE ?)
+       ORDER BY ms.event_date, m.name LIMIT 100`, [q, q]);
+    res.json({ data: rows, meta: {} });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/v1/sessions/:sessionId/stalls", requireAuth, async (req, res, next) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT s.id, s.stall_code, s.label, s.map_x, s.map_y, s.map_width, s.map_height,
+              s.base_price, s.status,
+              CASE WHEN r.id IS NULL THEN 'available' ELSE r.status END AS availability
+       FROM market_sessions ms JOIN stalls s ON s.market_id = ms.market_id
+       LEFT JOIN reservations r ON r.session_id = ms.id AND r.stall_id = s.id
+         AND r.status IN ('pending','confirmed')
+       WHERE ms.id = ? ORDER BY s.stall_code`, [req.params.sessionId]);
+    res.json({ data: rows, meta: {} });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/v1/reservations", requireAuth, async (req, res, next) => {
+  const sessionId = Number(req.body?.sessionId), stallId = Number(req.body?.stallId);
+  const note = req.body?.shopNote == null ? null : String(req.body.shopNote).trim();
+  if (!Number.isSafeInteger(sessionId) || sessionId < 1 || !Number.isSafeInteger(stallId) || stallId < 1 || (note && note.length > 500)) {
+    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "ข้อมูลการจองไม่ถูกต้อง", details: [] } });
+  }
+  const connection = await pool.getConnection().catch(next);
+  if (!connection) return;
+  try {
+    await connection.beginTransaction();
+    const [sessions] = await connection.execute("SELECT id, market_id, status, event_date, booking_opens_at, booking_closes_at FROM market_sessions WHERE id = ? FOR UPDATE", [sessionId]);
+    const session = sessions[0];
+    if (!session || session.status !== "open" || (session.booking_opens_at && new Date(session.booking_opens_at) > new Date()) || (session.booking_closes_at && new Date(session.booking_closes_at) < new Date())) {
+      await connection.rollback();
+      return res.status(409).json({ error: { code: "BOOKING_CLOSED", message: "รอบนี้ยังไม่เปิดหรือปิดรับจองแล้ว", details: [] } });
+    }
+    const [stalls] = await connection.execute("SELECT id, base_price FROM stalls WHERE id = ? AND market_id = ? AND status = 'available' FOR UPDATE", [stallId, session.market_id]);
+    if (!stalls.length) { await connection.rollback(); return res.status(404).json({ error: { code: "STALL_NOT_FOUND", message: "ไม่พบแผงที่เปิดจอง", details: [] } }); }
+    const [existing] = await connection.execute("SELECT id FROM reservations WHERE session_id = ? AND stall_id = ? AND status IN ('pending','confirmed') LIMIT 1", [sessionId, stallId]);
+    if (existing.length) { await connection.rollback(); return res.status(409).json({ error: { code: "SLOT_ALREADY_BOOKED", message: "แผงนี้มีผู้จองแล้ว", details: [] } }); }
+    const [result] = await connection.execute("INSERT INTO reservations (shop_id, session_id, stall_id, requested_price, shop_note) VALUES (?, ?, ?, ?, ?)", [req.auth.shop_id, sessionId, stallId, stalls[0].base_price, note]);
+    await connection.commit();
+    res.status(201).json({ data: { id: result.insertId, status: "pending", sessionId, stallId, requestedPrice: stalls[0].base_price }, meta: {} });
+  } catch (error) {
+    await connection.rollback();
+    if (error.code === "ER_DUP_ENTRY") return res.status(409).json({ error: { code: "SLOT_ALREADY_BOOKED", message: "แผงนี้มีผู้จองแล้ว", details: [] } });
+    next(error);
+  } finally { connection.release(); }
+});
+
+app.get("/api/v1/reservations", requireAuth, async (req, res, next) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT r.id, r.status, r.requested_price, r.shop_note, r.created_at,
+              ms.title AS session_title, ms.event_date, m.name AS market_name,
+              s.stall_code
+       FROM reservations r JOIN market_sessions ms ON ms.id = r.session_id
+       JOIN markets m ON m.id = ms.market_id JOIN stalls s ON s.id = r.stall_id
+       WHERE r.shop_id = ? ORDER BY r.created_at DESC LIMIT 100`, [req.auth.shop_id]);
+    res.json({ data: rows, meta: {} });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/v1/reservations/:reservationId/cancel", requireAuth, async (req, res, next) => {
+  try {
+    const [result] = await pool.execute("UPDATE reservations SET status = 'cancelled' WHERE id = ? AND shop_id = ? AND status = 'pending'", [req.params.reservationId, req.auth.shop_id]);
+    if (!result.affectedRows) return res.status(409).json({ error: { code: "RESERVATION_NOT_CANCELLABLE", message: "ยกเลิกไม่ได้หรือไม่พบรายการนี้", details: [] } });
+    res.json({ data: { message: "ยกเลิกคำขอแล้ว" }, meta: {} });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/v1/shop/dashboard", requireAuth, async (req, res, next) => {
+  try {
+    const [rows] = await pool.execute("SELECT status, COUNT(*) AS count FROM reservations WHERE shop_id = ? GROUP BY status", [req.auth.shop_id]);
+    const [latest] = await pool.execute("SELECT r.id, r.status, ms.title, ms.event_date, s.stall_code FROM reservations r JOIN market_sessions ms ON ms.id = r.session_id JOIN stalls s ON s.id = r.stall_id WHERE r.shop_id = ? ORDER BY r.created_at DESC LIMIT 5", [req.auth.shop_id]);
+    res.json({ data: { counts: Object.fromEntries(rows.map((r) => [r.status, Number(r.count)])), latest }, meta: {} });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/v1/public/sessions/:token/map", async (req, res, next) => {
+  try {
+    const [sessions] = await pool.execute("SELECT ms.id, ms.title, ms.event_date, ms.start_time, ms.end_time, m.name AS market_name, m.address FROM market_sessions ms JOIN markets m ON m.id = ms.market_id WHERE ms.public_token = ? AND ms.status IN ('open','closed') AND m.is_active = 1 LIMIT 1", [req.params.token]);
+    if (!sessions.length) return res.status(404).json({ error: { code: "PUBLIC_MAP_NOT_FOUND", message: "ไม่พบแผนผังนี้", details: [] } });
+    const [stalls] = await pool.execute("SELECT s.stall_code, s.label, s.map_x, s.map_y, s.map_width, s.map_height, sh.id AS shop_id, sh.shop_name, sh.description, sh.public_contact, c.name AS category_name FROM stalls s JOIN reservations r ON r.stall_id = s.id AND r.session_id = ? AND r.status = 'confirmed' JOIN shops sh ON sh.id = r.shop_id AND sh.is_published = 1 LEFT JOIN categories c ON c.id = sh.category_id WHERE s.status = 'available' ORDER BY s.stall_code", [sessions[0].id]);
+    res.json({ data: { session: sessions[0], stalls }, meta: {} });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/v1/public/sessions/:token/shops", async (req, res, next) => {
+  try {
+    const q = typeof req.query.q === "string" ? `%${req.query.q.trim()}%` : "%";
+    const categoryId = req.query.categoryId ? Number(req.query.categoryId) : null;
+    const [rows] = await pool.execute("SELECT sh.id, sh.shop_name, sh.description, sh.public_contact, c.name AS category_name, s.stall_code, s.map_x, s.map_y FROM market_sessions ms JOIN reservations r ON r.session_id = ms.id AND r.status = 'confirmed' JOIN shops sh ON sh.id = r.shop_id AND sh.is_published = 1 JOIN stalls s ON s.id = r.stall_id LEFT JOIN categories c ON c.id = sh.category_id WHERE ms.public_token = ? AND ms.status IN ('open','closed') AND sh.shop_name LIKE ? AND (? IS NULL OR sh.category_id = ?) ORDER BY sh.shop_name LIMIT 100", [req.params.token, q, categoryId, categoryId]);
+    res.json({ data: rows, meta: {} });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/health", async (req, res, next) => {
   try {
     await pool.query("SELECT 1");
@@ -541,7 +735,7 @@ app.use((error, req, res, next) => {
 async function startServer() {
   try {
     await initializeSchema();
-    app.listen(port, () => {
+    app.listen(3102, () => {
       console.log(`Server running at http://localhost:${port}`);
     });
   } catch (error) {

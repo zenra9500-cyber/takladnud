@@ -145,12 +145,12 @@
 
 ## 5. UI, accessibility และคุณภาพระบบ
 
-- [ ] `T5.1` ใช้ธีมตลาดไทยย้อนยุคอย่างสม่ำเสมอ
+- [-] `T5.1` ใช้ธีมตลาดไทยย้อนยุคอย่างสม่ำเสมอ
   - **ทำอะไร:** ใช้ palette น้ำตาล/เขียว/เหลืองพาสเทล ครีมกระดาษ ตัวอักษรไทยอ่านง่ายและรายละเอียดลายตลาดแบบพอดี
   - **ทำที่ไหน:** `public/style.css` และ markup ใน `public/index.html`
   - **ทำอย่างไร:** CSS variables, contrast ตรวจสอบได้, พื้นผิวไม่รบกวนข้อความ; ไม่สร้าง asset นอก `public/images/`
   - **เกณฑ์เสร็จ:** ทุกหน้าใช้ theme เดียวกันและสถานะไม่อาศัยสีเพียงอย่างเดียว
-  - **บันทึกงาน:** ยังไม่เริ่ม
+  - **บันทึกงาน:** 2026-10-31 — เริ่มตกแต่งพื้นที่ตลาดและแผนผังด้วยโทนไม้ ผ้าใบกันสาด ป้ายตลาด ทางเดิน และแผงร้าน; ยังต้องทบทวนความสม่ำเสมอและ contrast ในทุกหน้าก่อนปิด task
 - [ ] `T5.2` Responsive และเข้าถึงได้
   - **ทำอะไร:** รองรับมือถือ แท็บเล็ต desktop ผู้ใช้อายุหลากหลายและการใช้ keyboard
   - **ทำที่ไหน:** `public/style.css`, `public/index.html`, `public/index.js`
@@ -214,3 +214,5 @@
 | 2026-10-31 | T2.1 | เพิ่มหน้าสมัครและ API ลงทะเบียนร้านแบบ transaction พร้อมโหลดหมวดหมู่ | `package.json`, `server.js`, `public/index.html`, `public/index.js`, `public/style.css`, `tasks.md` | Diagnostics ไม่พบ errors ในไฟล์ที่ตรวจ | ยังต้องติดตั้ง bcryptjs และทดสอบด้วย Node/MariaDB |
 | 2026-10-31 | T2.2 | เพิ่ม login/logout/me, session token hash, auth middleware, rate limit และ UI | `server.js`, `public/index.html`, `public/index.js`, `public/style.css`, `tasks.md` | Diagnostics ไม่พบ errors ในไฟล์ที่ตรวจ | ต้องทดสอบ login/logout/session expiry กับ runtime/DB จริง; sessionStorage ลดการคง token หลังปิดแท็บ |
 | 2026-10-31 | T2.3 | เพิ่มอ่าน/แก้ไขโปรไฟล์ร้านและ UI ที่จำกัดการแก้ไขร้านตาม token | `server.js`, `public/index.html`, `public/index.js`, `public/style.css`, `tasks.md` | Diagnostics ผ่าน; ยังไม่มี runtime/DB test | ต้องตรวจ API authorization, validation, เผยแพร่/ไม่เผยแพร่ และเพิ่ม public preview ในภายหลัง |
+| 2026-10-31 | T5.1 | เริ่มตกแต่งพื้นที่แผนผังตลาดให้มีบรรยากาศตลาดชุมชนไทย | `public/style.css`, `tasks.md` | ตรวจ CSS ที่เพิ่มและ responsive overrides ด้วยการอ่านโค้ด; ยังไม่ได้เปิด browser | ต้องตรวจหน้าจอจริงและทบทวนธีมส่วนอื่นก่อนทำเครื่องหมายเสร็จ |
+| 2026-10-31 | T0.2 (เพิ่มเติม) | ขยายแนวทางธีมและโครงสร้างหน้าจอรายบทบาท ตั้งแต่หน้าแรก/Shop จนถึงหน้า Customer จาก QR | `spec.md`, `tasks.md` | ตรวจความครอบคลุมขององค์ประกอบ ลำดับการใช้งาน สี และการรองรับวัย 18–60 ปี | เป็นเอกสารออกแบบ; หน้าจอจริงต้อง implement และตรวจแยกตาม task |
