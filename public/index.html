@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f0e9">
+  <title>Projack — เริ่มต้นโปรเจกต์</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/index.js" defer></script>
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Projack หน้าหลัก"><span class="brand-mark">P</span>PROJACK</a>
+      <span class="topbar-note">EXPRESS + MARIADB STARTER</span>
+    </header>
+
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="eyebrow-line"></span> ตลาดไทย / ชุมชน / ผู้ค้า</p>
+        <h1 id="hero-title">พบกันที่<br><span>ตากหลาด</span>นัด</h1>
+        <p class="intro">สมัครร้านค้าของคุณ เพื่อเตรียมพร้อมออกแผงและพบลูกค้าในตลาดนัดชุมชน</p>
+        <a class="start-link" href="#register">เริ่มสมัครร้านค้า <span aria-hidden="true">↘</span></a>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <div class="art-card"><span class="art-index">01 / BUILD</span><div class="art-symbol">✳</div><span class="art-caption">MAKE IT<br>MATTER.</span></div>
+        <span class="art-dot dot-one"></span><span class="art-dot dot-two"></span>
+        <span class="art-coordinate">13°45' N<br>100°31' E</span>
+      </div>
+    </section>
+
+    <section class="register-panel" id="register" aria-labelledby="register-title">
+      <div class="register-intro">
+        <p class="eyebrow">เปิดแผงใหม่</p>
+        <h2 id="register-title">สมัครเป็นผู้ค้า</h2>
+        <p>ใช้ข้อมูลติดต่อสำหรับบัญชี และข้อมูลร้านเพื่อเริ่มต้นใช้งาน</p>
+      </div>
+      <form id="register-form" novalidate>
+        <div class="form-grid">
+          <label>ชื่อผู้ติดต่อ<input name="displayName" autocomplete="name" maxlength="120" required></label>
+          <label>เบอร์โทรศัพท์<input name="phone" type="tel" autocomplete="tel" maxlength="20" required></label>
+          <label>อีเมล <span class="optional">ไม่บังคับ</span><input name="email" type="email" autocomplete="email" maxlength="254"></label>
+          <label>ชื่อร้าน<input name="shopName" maxlength="150" required></label>
+          <label>หมวดหมู่ร้าน <span class="optional">ไม่บังคับ</span><select name="categoryId" id="category-select"><option value="">ยังไม่เลือก</option></select></label>
+          <label>รหัสผ่าน<input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label>
+        </div>
+        <p class="privacy-note">ข้อมูลส่วนตัวใช้สำหรับบัญชีผู้ค้าเท่านั้น ข้อมูลร้านจะยังไม่เผยแพร่สู่สาธารณะจนกว่าจะเปิดใช้งาน</p>
+        <button class="submit-button" type="submit">สร้างบัญชีผู้ค้า <span aria-hidden="true">↗</span></button>
+        <p id="register-message" class="form-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="account-panel" aria-labelledby="account-title">
+      <div class="register-intro">
+        <p class="eyebrow">มีบัญชีแล้ว?</p>
+        <h2 id="account-title">เข้าสู่ระบบผู้ค้า</h2>
+      </div>
+      <form id="login-form" class="login-form" novalidate>
+        <label>เบอร์โทรศัพท์<input name="phone" type="tel" autocomplete="username" maxlength="20" required></label>
+        <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" maxlength="72" required></label>
+        <button class="submit-button" type="submit">เข้าสู่ระบบ</button>
+        <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
+      </form>
+      <div id="account-summary" class="account-summary" hidden>
+        <p id="account-greeting"></p>
+        <button id="logout-button" type="button">ออกจากระบบ</button>
+      </div>
+      <form id="profile-form" class="profile-form" novalidate hidden>
+        <h3>ข้อมูลร้านของฉัน</h3>
+        <div class="form-grid">
+          <label>ชื่อร้าน<input name="shopName" maxlength="150" required></label>
+          <label>หมวดหมู่ร้าน<select name="categoryId" id="profile-category"><option value="">ยังไม่เลือก</option></select></label>
+          <label class="wide-field">รายละเอียดร้าน<textarea name="description" maxlength="2000" rows="4"></textarea></label>
+          <label class="wide-field">ช่องทางติดต่อที่ยินยอมเผยแพร่<input name="publicContact" maxlength="150" placeholder="เช่น เพจร้านหรือ LINE Official"></label>
+        </div>
+        <label class="publish-toggle"><input name="isPublished" type="checkbox"> อนุญาตเผยแพร่ข้อมูลร้านสู่สาธารณะ</label>
+        <button class="submit-button" type="submit">บันทึกโปรไฟล์</button>
+        <p id="profile-message" class="form-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="status-panel" id="status" aria-labelledby="status-title">
+      <div class="status-heading"><div><p class="eyebrow">SYSTEM CHECK</p><h2 id="status-title">สถานะระบบ</h2></div><button id="check-button" type="button">ตรวจสอบอีกครั้ง <span aria-hidden="true">↗</span></button></div>
+      <div class="status-grid">
+        <div class="status-item"><span class="status-label">เว็บเซิร์ฟเวอร์</span><span class="status-value"><i class="status-light"></i><span id="server-status">กำลังตรวจสอบ</span></span></div>
+        <div class="status-item"><span class="status-label">ฐานข้อมูล</span><span class="status-value"><i class="status-light" id="db-light"></i><span id="database-status">กำลังตรวจสอบ</span></span></div>
+        <div class="status-item"><span class="status-label">เริ่มต้นที่</span><span class="status-value status-mono">localhost:3102</span></div>
+      </div>
+    </section>
+
+    <footer><span>ตากหลาดนัด / ตลาดชุมชน</span><span>พื้นที่พบกันของผู้ค้าและผู้คน <span aria-hidden="true">✳</span></span></footer>
+  </main>
+</body>
+</html>
